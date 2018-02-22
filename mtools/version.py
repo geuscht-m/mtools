@@ -1,1 +1,4 @@
-__version__ = '1.2.4-dev'
+#!/bin/python
+"""Mtools version."""
+
+__version__ = '1.3.3-dev'
