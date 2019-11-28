@@ -35,6 +35,7 @@ class LogFile(InputSource):
         self._repl_set = None
         self._repl_set_members = None
         self._repl_set_version = None
+        self._repl_set_protocol = None
 
         self._storage_engine = None
 
@@ -192,6 +193,13 @@ class LogFile(InputSource):
         return self._repl_set_version
 
     @property
+    def repl_set_protocol(self):
+        """Return the replSet protocolVersion (if available)."""
+        if not self._num_lines:
+            self._iterate_lines()
+        return self._repl_set_protocol
+
+    @property
     def storage_engine(self):
         """Return storage engine if available."""
         if not self._num_lines:
@@ -204,10 +212,13 @@ class LogFile(InputSource):
         # use readline here because next() iterator uses internal readahead
         # buffer so seek position is wrong
         line = self.filehandle.readline()
+
+        if isinstance(line, bytes):
+            line = line.decode('utf-8', 'replace')
+
         if line == '':
             raise StopIteration
         line = line.rstrip('\n')
-
         le = LogEvent(line)
 
         # hint format and nextpos from previous line
@@ -248,15 +259,18 @@ class LogFile(InputSource):
                 if not self.from_stdin:
                     self.filehandle.seek(0)
 
-                # now raise StopIteration exception
-                raise e
+                # return (instead of raising StopIteration exception) per PEP 479
+                return
 
             # get start date for stdin input
             if not self.start and self.from_stdin:
                 if le and le.datetime:
                     self._start = le.datetime
 
-            yield le
+            try:
+                yield le
+            except StopIteration:
+                return
 
     states = (['PRIMARY', 'SECONDARY', 'DOWN', 'STARTUP', 'STARTUP2',
                'RECOVERING', 'ROLLBACK', 'ARBITER', 'UNKNOWN'])
@@ -273,6 +287,8 @@ class LogFile(InputSource):
 
         ln = 0
         for ln, line in enumerate(self.filehandle):
+            if isinstance(line, bytes):
+                line = line.decode("utf-8", "replace")
 
             if (self._has_level is None and
                     line[28:31].strip() in LogEvent.log_levels and
@@ -312,7 +328,7 @@ class LogFile(InputSource):
             """ For 3.2 the "[initandlisten] options:" no longer contains the
                 "engine" field So now we have to look for the "[initandlisten]
                 wiredtiger_open config:" which was present in 3.0, but would
-                now tell us definatively that wiredTiger is being used
+                now tell us definitively that wiredTiger is being used
             """
             if "[initandlisten] wiredtiger_open config:" in line:
                 self._storage_engine = 'wiredTiger'
@@ -324,15 +340,17 @@ class LogFile(InputSource):
                     self._repl_set = match.group('replSet')
                     self._repl_set_members = match.group('replSetMembers')
 
-            new_config = ("replSet info saving a newer config version "
-                          "to local.system.replset: ")
+            # Replica set config logging in MongoDB 3.0+
+            new_config = ("New replica set config in use: ")
             if new_config in line:
                 match = re.search('{ _id: "(?P<replSet>\S+)", '
                                   'version: (?P<replSetVersion>\d+), '
+                                  '(protocolVersion: (?P<replSetProtocol>\d+), )?'
                                   'members: (?P<replSetMembers>[^]]+ ])', line)
                 if match:
                     self._repl_set = match.group('replSet')
                     self._repl_set_members = match.group('replSetMembers')
+                    self._repl_set_protocol = match.group('replSetProtocol')
                     self._repl_set_version = match.group('replSetVersion')
 
             # if ("is now in state" in line and
@@ -482,6 +500,9 @@ class LogFile(InputSource):
                              % self.filehandle.name)
         else:
             self.prev_pos = curr_pos
+
+        if isinstance(buff, bytes):
+            buff = buff.decode("utf-8", "replace")
 
         newline_pos = buff.rfind('\n')
         if prev:

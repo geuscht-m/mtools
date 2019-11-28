@@ -37,7 +37,6 @@ class TestMLaunch(object):
         self.use_auth = False
         self.data_dir = ''
 
-
     def setup(self):
         """Start up method to create mlaunch tool and find free port."""
         self.tool = MLaunchTool(test=True)
@@ -304,8 +303,7 @@ class TestMLaunch(object):
         assert os.path.isfile(startup_file)
 
         # compare content of startup file with tool.args
-        file_contents = self.tool._convert_u2b(json.load(open(startup_file,
-                                                              'r')))
+        file_contents = json.load(open(startup_file, 'rb'))
         assert file_contents['parsed_args'] == self.tool.args
         assert file_contents['unknown_args'] == self.tool.unknown_args
 
@@ -706,7 +704,6 @@ class TestMLaunch(object):
                     for x in user['roles']]) == set(self.tool.
                                                     _default_auth_roles))
 
-
     @attr('auth')
     def test_adding_custom_user(self):
         """mlaunch: test custom username and password and custom roles."""
@@ -762,7 +759,7 @@ class TestMLaunch(object):
         # now start with old config and check if upgrade worked
         self.run_tool("start")
         with open(os.path.join(self.base_dir, 'test_upgrade_v1_to_v2',
-                               '.mlaunch_startup'), 'r') as f:
+                               '.mlaunch_startup'), 'rb') as f:
             startup_options = json.load(f)
             assert startup_options['protocol_version'] == 2
 

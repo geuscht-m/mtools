@@ -99,12 +99,12 @@ class MLogFilterTool(LogFileTool):
         if self.args['json']:
             print(logevent.to_json())
             return
-
         line = logevent.line_str
 
         if length:
             if len(line) > length:
-                line = line[:length / 2 - 2] + '...' + line[-length / 2 + 1:]
+                line = (line[:int(length / 2 - 2)] + '...' +
+                        line[int(-length / 2 + 1):])
         if human:
             line = self._changeMs(line)
             line = self._formatNumbers(line)
@@ -186,7 +186,7 @@ class MLogFilterTool(LogFileTool):
     def _merge_logfiles(self):
         """Helper method to merge several files together by datetime."""
         # open files, read first lines, extract first dates
-        lines = [next(logfile, None) for logfile in self.args['logfile']]
+        lines = [next(iter(logfile), None) for logfile in self.args['logfile']]
 
         # adjust lines by timezone
         for i in range(len(lines)):
@@ -197,20 +197,19 @@ class MLogFilterTool(LogFileTool):
 
         while any(lines):
             min_line = min(lines, key=self._datetime_key_for_merge)
-            min_index = lines.index(min_line)
+            min_idx = lines.index(min_line)
 
-            if self.args['markers'][min_index]:
-                min_line.merge_marker_str = self.args['markers'][min_index]
+            if self.args['markers'][min_idx]:
+                min_line.merge_marker_str = self.args['markers'][min_idx]
 
             yield min_line
 
-            # update lines array with a new line from the min_index'th logfile
-            lines[min_index] = next(self.args['logfile'][min_index], None)
-            if lines[min_index] and lines[min_index].datetime:
-                lines[min_index]._datetime = (lines[min_index].datetime +
-                                              timedelta(hours=self
-                                                        .args['timezone']
-                                                        [min_index]))
+            # update lines array with a new line from the min_idx'th logfile
+            lines[min_idx] = next(iter(self.args['logfile'][min_idx]), None)
+            if lines[min_idx] and lines[min_idx].datetime:
+                lines[min_idx]._datetime = (
+                    lines[min_idx].datetime +
+                    timedelta(hours=self.args['timezone'][min_idx]))
 
     def logfile_generator(self):
         """Yield each line of the file, or the next line if several files."""
@@ -226,7 +225,11 @@ class MLogFilterTool(LogFileTool):
         if len(self.args['logfile']) > 1:
             # merge log files by time
             for logevent in self._merge_logfiles():
-                yield logevent
+                try:
+                    yield logevent
+                except StopIteration:
+                    return
+
         else:
             # only one file
             for logevent in self.args['logfile'][0]:
@@ -234,7 +237,10 @@ class MLogFilterTool(LogFileTool):
                     logevent._datetime = (logevent.datetime +
                                           timedelta(hours=self
                                                     .args['timezone'][0]))
-                yield logevent
+                try:
+                    yield logevent
+                except StopIteration:
+                    return
 
     def run(self, arguments=None):
         """
@@ -247,14 +253,13 @@ class MLogFilterTool(LogFileTool):
         for f in self.filters:
             for fa in f.filterArgs:
                 self.argparser.add_argument(fa[0], **fa[1])
-
         # now parse arguments and post-process
         LogFileTool.run(self, arguments)
+
         self.args = dict((k, self.args[k]
                           if k in ['logfile', 'markers', 'timezone']
                           else self._arrayToString(self.args[k]))
                          for k in self.args)
-
         # make sure logfile is always a list, even if 1 is provided
         # through sys.stdin
         if not isinstance(self.args['logfile'], list):

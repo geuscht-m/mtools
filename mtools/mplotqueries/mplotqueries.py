@@ -14,17 +14,18 @@ from mtools import __version__
 from mtools.util.cmdlinetool import LogFileTool
 
 try:
+    import matplotlib
     import matplotlib.pyplot as plt
     from matplotlib.dates import AutoDateFormatter, date2num, AutoDateLocator
     from matplotlib import __version__ as mpl_version
     import mtools.mplotqueries.plottypes as plottypes
-except ImportError:
+except ImportError as e:
     raise ImportError("Can't import matplotlib. See "
                       "github.com/rueckstiess/mtools/blob/master/INSTALL.md "
                       "for instructions how to install matplotlib or try "
                       "mlogvis instead, which is a simplified version of "
                       "mplotqueries that visualizes the logfile in a "
-                      "web browser.")
+                      "web browser. Error: " + str(e))
 
 
 class MPlotQueriesTool(LogFileTool):
@@ -174,7 +175,10 @@ class MPlotQueriesTool(LogFileTool):
             multiple_files = True
             self.args['group'] = 'filename'
 
-        self.plot_instance = self.plot_types[self.args['type']](args=self.args, unknown_args=self.unknown_args)
+        self.plot_instance = self.plot_types[
+            self.args['type']](
+                args=self.args,
+                unknown_args=self.unknown_args)
 
         for logfile in self.logfiles:
 
@@ -585,7 +589,7 @@ class MPlotQueriesTool(LogFileTool):
         # use timezone of first log file (may not always be what user wants
         # but must make a choice)
         tz = self.logfiles[0].timezone
-        tzformat = '%b %d\n%H:%M:%S' if tz == tzutc() else '%b %d\n%H:%M:%S%z'
+        # tzformat='%b %d\n%H:%M:%S' if tz == tzutc() else '%b %d\n%H:%M:%S%z'
 
         locator = AutoDateLocator(tz=tz, minticks=5, maxticks=10)
         formatter = AutoDateFormatter(locator, tz=tz)

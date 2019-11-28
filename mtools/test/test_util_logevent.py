@@ -61,6 +61,9 @@ line_truncated_24 = ("Wed Jan 28 00:31:16.302 [conn12345] warning: log line "
                      "cursorid:1234567890123456789 ntoreturn:0 keyUpdates:0 "
                      "numYields: 23 locks(micros) r:24715 nreturned:1324 "
                      "reslen:256993 1445ms")
+line_fassert = ("***aborting after fassert() failure")
+line_empty = ("")
+line_new_oplog_query = ('2018-05-01T21:57:45.989+0000 I REPL [replication-0] Scheduled new oplog query Fetcher source: host.name database: local query: { find: "oplog.rs", filter: { ts: { $gte: Timestamp(1525211859, 1) } }, tailable: true, oplogReplay: true, awaitData: true, maxTimeMS: 60000, batchSize: 13981010, term: 1, readConcern: { afterClusterTime: Timestamp(1525211859, 1) } } query metadata: { $replData: 1, $oplogQueryData: 1, $readPreference: { mode: "secondaryPreferred" } } active: 1 findNetworkTimeout: 65000ms getMoreNetworkTimeout: 7500ms shutting down?: 0 first: 1 firstCommandScheduler: RemoteCommandRetryScheduler request: RemoteCommand 16543 -- target:host.name db:local cmd:{ find: "oplog.rs", filter: { ts: { $gte: Timestamp(1525211859, 1) } }, tailable: true, oplogReplay: true, awaitData: true, maxTimeMS: 60000, batchSize: 13981010, term: 1, readConcern: { afterClusterTime: Timestamp(1525211859, 1) } } active: 1 callbackHandle.valid: 1 callbackHandle.cancelled: 0 attempt: 1 retryPolicy: RetryPolicyImpl maxAttempts: 1 maxTimeMillis: -1ms')
 
 # fake system.profile documents
 profile_doc1 = {"op": "query", "ns": "test.foo",
@@ -135,7 +138,6 @@ def test_logevent_datetime_parsing():
 
 
 def test_logevent_pattern_parsing():
-
     le = LogEvent(line_pattern_26_a)
     assert(le.pattern) == '{"a": 1}'
 
@@ -146,8 +148,18 @@ def test_logevent_pattern_parsing():
     assert(le.pattern) == '{"a": 1}'
 
 
-def test_logevent_command_parsing():
+def test_logevent_actual_query_parsing():
+    le = LogEvent(line_pattern_26_a)
+    assert(le.actual_query) == '{ a: 1.0 }'
 
+    le = LogEvent(line_pattern_26_b)
+    assert(le.actual_query) == '{ a: 1.0 }'
+
+    le = LogEvent(line_pattern_26_c)
+    assert(le.actual_query) == '{ a: 1.0 }'
+
+
+def test_logevent_command_parsing():
     le = LogEvent(line_command_26_a)
     assert(le.command) == 'replsetgetstatus'
 
@@ -159,7 +171,6 @@ def test_logevent_command_parsing():
 
 
 def test_logevent_sort_pattern_parsing():
-
     le = LogEvent(line_pattern_26_a)
     assert(le.sort_pattern) is None
 
@@ -168,6 +179,17 @@ def test_logevent_sort_pattern_parsing():
 
     le = LogEvent(line_pattern_26_c)
     assert(le.sort_pattern) == '{"b": 1}'
+
+
+def test_logevent_actual_sort_parsing():
+    le = LogEvent(line_pattern_26_a)
+    assert(le.actual_sort) is None
+
+    le = LogEvent(line_pattern_26_b)
+    assert(le.actual_sort) == '{ b: 1.0 }'
+
+    le = LogEvent(line_pattern_26_c)
+    assert(le.actual_sort) == '{ b: 1.0 }'
 
 
 def test_logevent_profile_pattern_parsing():
@@ -211,6 +233,17 @@ def test_logevent_extract_planSummary():
     le = LogEvent(line_26_planSummary)
     assert(le.planSummary == "IXSCAN")
 
+    le = LogEvent(line_pattern_26_a)
+    assert(le.planSummary == "EOF")
+
+
+def test_logevent_extract_actualPlanSummary():
+    le = LogEvent(line_26_planSummary)
+    assert(le.actualPlanSummary == "IXSCAN { cid: 1 }")
+
+    le = LogEvent(line_pattern_26_a)
+    assert(le.actualPlanSummary == "EOF")
+
 
 def test_logevent_value_extraction():
     """ Check for correct value extraction of all fields. """
@@ -225,6 +258,37 @@ def test_logevent_value_extraction():
     assert(le.ntoreturn == 0)
     assert(le.nreturned == 13551)
     assert(le.pattern == '{"ts": 1}')
+
+
+def test_logevent_non_log_line():
+    """ Check that LogEvent correctly ignores non log lines"""
+    le = LogEvent(line_fassert)
+    assert(le.thread == None)
+    assert(le.operation == None)
+    assert(le.namespace == None)
+    assert(le.duration == None)
+    assert(le.numYields == None)
+    assert(le.r == None)
+    assert(le.ntoreturn == None)
+    assert(le.nreturned == None)
+    assert(le.pattern == None)
+
+    le = LogEvent(line_empty)
+    assert(le.thread == None)
+    assert(le.operation == None)
+    assert(le.namespace == None)
+    assert(le.duration == None)
+    assert(le.numYields == None)
+    assert(le.r == None)
+    assert(le.ntoreturn == None)
+    assert(le.nreturned == None)
+    assert(le.pattern == None)
+
+
+def test_logevent_new_oplog_query():
+    """ Check that LogEvent correctly ignores new oplog query for duration extraction """
+    le = LogEvent(line_new_oplog_query)
+    assert(le.duration == None)
 
 
 def test_logevent_lazy_evaluation():

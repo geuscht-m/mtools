@@ -2,6 +2,95 @@
 Changes to mtools
 =================
 
+version 1.5.3
+~~~~~~~~~~~~~
+* mlaunch: Quote mongos --logpath (to handle paths with spaces)
+* mlaunch: Permit command line options with "="
+* mlaunch: Ignore passing unsupported param --wiredTigerCacheSizeGB to mongos
+* mlaunch: Add --wiredTigerEngineConfigString as an undocumented mongod param
+* util/logevent.py: Add LogEvent support for returning actual query (not pattern)
+
+Thanks to @ajdavis, @renatoriccio, @twblamer, @kevinadi, @sindbach,
+@kallimachos, and @stennie for contributions to this release.
+
+version 1.5.2
+~~~~~~~~~~~~~
+* mlaunch: Set appname for MongoDB 3.4+ client metadata
+* mlaunch: Only use roles variable instead of args once set up
+* mlaunch: Fix for --sharded and --auth-role-docs failing to add roles
+* mlaunch: Fix failure to connect to standalone SSL mongod
+* mlaunch: Retain PyMongo import error exceptions
+* mlogfilter: Fix Unicode error for redirected output
+* Improve flake8 style compliance
+
+Thanks to @kevinadi, @p-mongo, @gmishkin, and @stennie for contributions
+to this release.
+
+version 1.5.1
+~~~~~~~~~~~~~
+* mlaunch: Fix 1.5.0 regression preventing use of --auth
+* mloginfo: Add support for MongoDB 3.2+ --rsinfo
+* mlogfilter: Fix intermittent test failures
+
+Thanks to @kevinadi, @kallimachos, @sindbach, and @stennie
+for contributions to this release.
+
+version 1.5.0
+~~~~~~~~~~~~~
+* Update matplotlib to 1.4.3
+* Update numpy to 1.14.5
+* Update python-dateutil to 2.7
+* Update pymongo to 3.6.1
+* Pin requirements to avoid pulling in breaking changes
+* Ignore "new oplog query" log entries for query duration parsing
+* Replace characters that can't be UTF decoded with '?'
+* Fix logic error preventing parsing of empty or unexpected log lines
+* mplotqueries: Report actual error when `matplotlib` import fails
+* mlaunch: If `mongod` is missing, print the path that was used
+* mlaunch: Add support for GSSAPI
+* mlaunch: Add users to all shards in sharded cluster
+* mlogvis: Remove write lock and read lock grouping
+
+Thanks to @kevinadi, @jamesbroadhead, @mathom, @kallimachos,
+@sindbach, and @stennie for contributions to this release!
+
+version 1.4.1
+~~~~~~~~~~~~~
+* mlaunch: Fixes for Python 3.6.5 support (#596, #586)
+* Include sys.version in --version output (#597)
+* Migrate wiki pages to gh-pages and RST (#550, #550)
+   - New documentation: http://blog.rueckstiess.com/mtools/
+
+Thanks to @kallimachos, @sindbach, @kevinadi, @manfontan,
+and @stennie for contributions to this release!
+
+version 1.4.0
+~~~~~~~~~~~~~
+
+* Improve testing and documentation infrastructure (#542)
+   - Add tox (#543)
+   - Fix flake8 violations (#544)
+   - Fix isort violations (#545)
+   - Fix PEP 257 violations (#546)
+   - Add RST documentation (#548)
+* Make code compatible with both Python 2.7 and 3.6 (#527)
+   - Add py36 environment for tox & Travis (#587)
+* mlaunch: Error while creating replica set with name and auth args (#476)
+* mlaunch: Testing for MongoDB 3.6 (#531)
+* mlaunch: Using --hostname causes deploying failure in 3.6 (#554)
+* mlaunch: psutil dependency missing (#557)
+* mlaunch: Require shard servers to be replica sets (3.6.1+) (#567)
+* mlaunch: Force `mlaunch --csrs` when "version" is `0.0.0` (#576)
+* mlaunch: Create user with SCRAM-SHA-1 mechanism (#574)
+* mlaunch: Allow starting 3.6 clusters with PyMongo 3.6.1 (#575)
+* mlaunch: Use correct path separator according to OS (#584)
+* mlaunch: Support path parameters containing spaces (#578)
+* mlaunch: Update psutil requirement to 5.4.2 (#590)
+* mloginfo: Test using current year rather than hardcoded value (#568)
+
+Thanks to @kallimachos, @kevinadi, @sindbach, @ajdavis, @jaraco, @devkev,
+@stephentunney, @shaneharvey, and @stennie for contributions to this release!
+
 version 1.3.2
 ~~~~~~~~~~~~~
 

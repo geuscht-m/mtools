@@ -10,19 +10,19 @@ try:
     from setuptools import setup, find_packages
 
     # test for 2.7-included packages, add to requirements if not available
-    install_requires = ['six']
+    install_requires = ['six', 'python-dateutil==2.7']
 
     # Additional dependencies from requirements.txt that should be installed
     # for full mtools feature support. These are optional dependencies to
     # simplify the default install experience, particularly where a build
     # toolchain is required.
     extras_requires = {
-        "all": ['matplotlib>=1.3.1', 'numpy>=1.8.0', 'pymongo>=3.3', 'psutil>=2.0'],
-        "mlaunch": ['pymongo>=3.3', 'psutil>=2.0'],
+        "all": ['matplotlib==3.1.1', 'numpy==1.16.4', 'pymongo==3.8.0', 'psutil==5.6.3'],
+        "mlaunch": ['pymongo==3.8.0', 'psutil==5.6.3'],
         "mlogfilter": [],
-        "mloginfo": ['numpy>=1.8.0'],
+        "mloginfo": ['numpy==1.16.4'],
         "mlogvis": [],
-        "mplotqueries": ['matplotlib>=1.3.1', 'numpy>=1.8.0'],
+        "mplotqueries": ['matplotlib==3.1.1', 'numpy==1.16.4'],
     }
 
     try:
@@ -34,12 +34,6 @@ try:
         from collections import OrderedDict
     except ImportError:
         install_requires.append('ordereddict')
-
-    # add dateutil if not installed already
-    try:
-        import dateutil
-    except ImportError:
-        install_requires.append('python-dateutil==2.2')
 
     packages = find_packages()
     kws = {'install_requires': install_requires}
@@ -108,7 +102,8 @@ setup(
         'Intended Audience :: Developers',
         'Topic :: Database',
         'License :: OSI Approved :: Apache Software License',
-        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
     ],
     keywords='MongoDB logs testing',
     extras_require=extras_requires,

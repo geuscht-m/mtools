@@ -5,7 +5,6 @@ from __future__ import print_function
 import argparse
 import json
 import os
-import Queue
 import re
 import signal
 import socket
@@ -18,8 +17,6 @@ import warnings
 from collections import defaultdict
 from operator import itemgetter
 
-import six
-
 import psutil
 from mtools.util import OrderedDict
 from mtools.util.cmdlinetool import BaseCmdLineTool
@@ -27,25 +24,28 @@ from mtools.util.print_table import print_table
 from mtools.version import __version__
 
 try:
+    import Queue
+except ImportError:
+    import queue as Queue
+
+try:
     try:
         from pymongo import MongoClient as Connection
-        from pymongo import MongoReplicaSetClient as ReplicaSetConnection
         from pymongo import version_tuple as pymongo_version
         from bson import SON
-        from StringIO import StringIO
+        from io import BytesIO
         from distutils.version import LooseVersion
     except ImportError:
         from pymongo import Connection
-        from pymongo import ReplicaSetConnection
         from pymongo import version_tuple as pymongo_version
         from bson import SON
 
     from pymongo.errors import ConnectionFailure, AutoReconnect
     from pymongo.errors import OperationFailure, ConfigurationError
-except ImportError:
+except ImportError as e:
     raise ImportError("Can't import pymongo. See "
-                      "http://api.mongodb.org/python/current/ for "
-                      "instructions on how to install pymongo.")
+                      "https://api.mongodb.com/python/current/ for "
+                      "instructions on how to install pymongo: " + str(e))
 
 
 class MongoConnection(Connection):
@@ -63,6 +63,9 @@ class MongoConnection(Connection):
         else:
             if 'serverSelectionTimeoutMS' in kwargs:
                 kwargs.remove('serverSelectionTimeoutMS')
+
+        # Set client application name for MongoDB 3.4+ servers
+        kwargs['appName'] = 'mlaunch v{0}'.format(__version__)
 
         Connection.__init__(self, *args, **kwargs)
 
@@ -142,6 +145,9 @@ def shutdown_host(port, username=None, password=None, authdb=None):
 
 
 class MLaunchTool(BaseCmdLineTool):
+    UNDOCUMENTED_MONGOD_ARGS = ['--nopreallocj', '--wiredTigerEngineConfigString']
+    UNSUPPORTED_MONGOS_ARGS = ['--wiredTigerCacheSizeGB', '--storageEngine']
+    UNSUPPORTED_CONFIG_ARGS = ['--oplogSize', '--storageEngine', '--smallfiles', '--nojournal']
 
     def __init__(self, test=False):
         BaseCmdLineTool.__init__(self)
@@ -184,7 +190,8 @@ class MLaunchTool(BaseCmdLineTool):
         # to run can call different sub-commands
         self.argparser = argparse.ArgumentParser()
         self.argparser.add_argument('--version', action='version',
-                                    version="mtools version %s" % __version__)
+                                    version="mtools version {0} || Python {1}".
+                                    format(__version__, sys.version))
         self.argparser.add_argument('--no-progressbar', action='store_true',
                                     default=False,
                                     help='disables progress bar')
@@ -321,6 +328,9 @@ class MLaunchTool(BaseCmdLineTool):
                                        'required to run the stop command '
                                        '(requires --auth, default="%s")'
                                        % ' '.join(self._default_auth_roles)))
+        init_parser.add_argument('--auth-role-docs', action='store_true',
+                                 default=False,
+                                 help='auth-roles are json documents')
         init_parser.add_argument('--no-initial-user', action='store_false',
                                  default=True, dest='initial-user',
                                  help=('create an initial user if auth is '
@@ -567,14 +577,16 @@ class MLaunchTool(BaseCmdLineTool):
 
         # Exit with error if --csrs is set and MongoDB < 3.1.0
         if (self.args['csrs'] and
-                LooseVersion(current_version) < LooseVersion("3.1.0")):
+                LooseVersion(current_version) < LooseVersion("3.1.0") and
+                LooseVersion(current_version) != LooseVersion("0.0.0")):
             errmsg = (" \n * The '--csrs' option requires MongoDB version "
                       "3.2.0 or greater, the current version is %s.\n"
                       % current_version)
             raise SystemExit(errmsg)
 
         # add the 'csrs' parameter as default for MongoDB >= 3.3.0
-        if LooseVersion(current_version) >= LooseVersion("3.3.0"):
+        if (LooseVersion(current_version) >= LooseVersion("3.3.0") or
+                LooseVersion(current_version) == LooseVersion("0.0.0")):
             self.args['csrs'] = True
 
         # construct startup strings
@@ -593,9 +605,10 @@ class MLaunchTool(BaseCmdLineTool):
         if self.args['auth'] and first_init:
             if not os.path.exists(self.dir):
                 os.makedirs(self.dir)
-            os.system('openssl rand -base64 753 > %s/keyfile' % self.dir)
+            keyfile = os.path.join(self.dir, "keyfile")
+            os.system('openssl rand -base64 753 > %s' % keyfile)
             if os.name != 'nt':
-                os.system('chmod 600 %s/keyfile' % self.dir)
+                os.system('chmod 600 %s' % keyfile)
 
         # if not all ports are free, complain and suggest alternatives.
         all_ports = self.get_tagged(['all'])
@@ -657,8 +670,8 @@ class MLaunchTool(BaseCmdLineTool):
                     else:
                         print("adding shards.")
 
-                shard_conns_and_names = zip(self.shard_connection_str,
-                                            shard_names)
+                shard_conns_and_names = list(zip(self.shard_connection_str,
+                                                 shard_names))
                 while True:
                     try:
                         nshards = con['config']['shards'].count()
@@ -727,7 +740,19 @@ class MLaunchTool(BaseCmdLineTool):
                 raise RuntimeError("can't connect to server, so adding admin "
                                    "user isn't possible")
 
-            if "clusterAdmin" not in self.args['auth_roles']:
+            roles = []
+            found_cluster_admin = False
+            if self.args['auth_role_docs']:
+                for role_str in self.args['auth_roles']:
+                    role_doc = json.loads(role_str)
+                    roles.append(role_doc)
+                    if role_doc['role'] == "clusterAdmin":
+                        found_cluster_admin = True
+            else:
+                roles = self.args['auth_roles']
+                found_cluster_admin = "clusterAdmin" in roles
+
+            if not found_cluster_admin:
                 warnings.warn("the stop command will not work with auth "
                               "because the user does not have the "
                               "clusterAdmin role")
@@ -735,7 +760,18 @@ class MLaunchTool(BaseCmdLineTool):
             self._add_user(sorted(nodes)[0], name=self.args['username'],
                            password=self.args['password'],
                            database=self.args['auth_db'],
-                           roles=self.args['auth_roles'])
+                           roles=roles)
+
+            if self.args['sharded']:
+                for shard in shard_names:
+                    members = sorted(self.get_tagged([shard]))
+                    if self.args['verbose']:
+                        print("adding users to %s" % shard)
+                    self._add_user(members[0],
+                                   name=self.args['username'],
+                                   password=self.args['password'],
+                                   database=self.args['auth_db'],
+                                   roles=roles)
 
             if self.args['verbose']:
                 print("added user %s on %s database" % (self.args['username'],
@@ -777,14 +813,20 @@ class MLaunchTool(BaseCmdLineTool):
         binary = "mongod"
         if self.args and self.args.get('binarypath'):
             binary = os.path.join(self.args['binarypath'], binary)
-        ret = subprocess.Popen([binary, '--version'],
-                               stderr=subprocess.STDOUT,
-                               stdout=subprocess.PIPE, shell=False)
+        try:
+            ret = subprocess.Popen(['%s' % binary, '--version'],
+                                   stderr=subprocess.STDOUT,
+                                   stdout=subprocess.PIPE, shell=False)
+        except OSError as e:
+            print('Failed to launch %s' % binary)
+            raise e
+
         out, err = ret.communicate()
         if ret.returncode:
             raise OSError(out or err)
-        buf = StringIO(out)
-        current_version = buf.readline().rstrip('\n')
+
+        buf = BytesIO(out)
+        current_version = buf.readline().strip().decode('utf-8')
         # remove prefix "db version v"
         if current_version.rindex('v') > 0:
             current_version = current_version.rpartition('v')[2]
@@ -986,7 +1028,7 @@ class MLaunchTool(BaseCmdLineTool):
         startup = self.startup_info
 
         # print tags as well
-        for doc in filter(lambda x: type(x) == OrderedDict, print_docs):
+        for doc in [x for x in print_docs if type(x) == OrderedDict]:
             try:
                 doc['pid'] = processes[doc['port']].pid
             except KeyError:
@@ -1059,7 +1101,7 @@ class MLaunchTool(BaseCmdLineTool):
 
         # get all running processes
         processes = self._get_processes()
-        procs = [processes[k] for k in processes.keys()]
+        procs = [processes[k] for k in list(processes.keys())]
 
         # stop nodes via stop command
         self.stop()
@@ -1092,8 +1134,9 @@ class MLaunchTool(BaseCmdLineTool):
             self.loaded_unknown_args = self.unknown_args
         else:
             if not self._load_parameters():
-                raise SystemExit("can't read %s/.mlaunch_startup, use "
-                                 "'mlaunch init ...' first." % self.dir)
+                startup_file = os.path.join(self.dir, ".mlaunch_startup")
+                raise SystemExit("Can't read %s, use 'mlaunch init ...' first."
+                                 % startup_file)
 
         self.ssl_pymongo_options = self._get_ssl_pymongo_options(
             self.loaded_args)
@@ -1111,8 +1154,6 @@ class MLaunchTool(BaseCmdLineTool):
                       self.loaded_args['sharded'] is not None)
         is_replicaset = ('replicaset' in self.loaded_args and
                          self.loaded_args['replicaset'])
-        is_csrs = ('csrs' in self.loaded_args and
-                   self.loaded_args['csrs'])
         is_single = 'single' in self.loaded_args and self.loaded_args['single']
         has_arbiter = ('arbiter' in self.loaded_args and
                        self.loaded_args['arbiter'])
@@ -1138,8 +1179,8 @@ class MLaunchTool(BaseCmdLineTool):
         current_port = self.loaded_args['port']
 
         # tag all nodes with 'all'
-        self.cluster_tags['all'].extend(range(current_port,
-                                              current_port + num_nodes))
+        self.cluster_tags['all'].extend(list(range(current_port,
+                                                   current_port + num_nodes)))
 
         # tag all nodes with their port number (as string) and whether
         # they are running
@@ -1166,8 +1207,8 @@ class MLaunchTool(BaseCmdLineTool):
             shard_names = [None]
 
         for shard in shard_names:
-            port_range = range(current_port, current_port +
-                               num_nodes_per_shard)
+            port_range = list(range(current_port,
+                                    current_port + num_nodes_per_shard))
 
             # all of these are mongod nodes
             self.cluster_tags['mongod'].extend(port_range)
@@ -1191,11 +1232,11 @@ class MLaunchTool(BaseCmdLineTool):
                     # is now non-blocking
                     if mrsc.primary:
                         self.cluster_tags['primary'].append(mrsc.primary[1])
-                    self.cluster_tags['secondary'].extend(map
+                    self.cluster_tags['secondary'].extend(list(map
                                                           (itemgetter(1),
-                                                           mrsc.secondaries))
-                    self.cluster_tags['arbiter'].extend(map(itemgetter(1),
-                                                            mrsc.arbiters))
+                                                           mrsc.secondaries)))
+                    self.cluster_tags['arbiter'].extend(list(map(itemgetter(1),
+                                                             mrsc.arbiters)))
 
                     # secondaries in cluster_tree (order is now important)
                     self.cluster_tree.setdefault('secondary', [])
@@ -1253,7 +1294,8 @@ class MLaunchTool(BaseCmdLineTool):
             con = self.client('localhost:%s' % port)
             con.admin.command('ping')
             return True
-        except (AutoReconnect, ConnectionFailure):
+        except (AutoReconnect, ConnectionFailure, OperationFailure):
+            # Catch OperationFailure to work around SERVER-31916.
             return False
 
     def get_tagged(self, tags):
@@ -1334,19 +1376,6 @@ class MLaunchTool(BaseCmdLineTool):
 
     # --- below here are internal helper methods, do not call externally ---
 
-    def _convert_u2b(self, obj):
-        """Helper method to convert unicode back to plain text."""
-        if isinstance(obj, dict):
-            return(dict([(self._convert_u2b(key),
-                          self._convert_u2b(value))
-                         for key, value in six.iteritems(obj)]))
-        elif isinstance(obj, list):
-            return [self._convert_u2b(element) for element in obj]
-        elif isinstance(obj, six.text_type):
-            return obj.encode('utf-8')
-        else:
-            return obj
-
     def _load_parameters(self):
         """
         Load the .mlaunch_startup file that exists in each datadir.
@@ -1359,7 +1388,7 @@ class MLaunchTool(BaseCmdLineTool):
         if not os.path.exists(startup_file):
             return False
 
-        in_dict = self._convert_u2b(json.load(open(startup_file, 'r')))
+        in_dict = json.load(open(startup_file, 'rb'))
 
         # handle legacy version without versioned protocol
         if 'protocol_version' not in in_dict:
@@ -1398,9 +1427,9 @@ class MLaunchTool(BaseCmdLineTool):
         try:
             json.dump(out_dict,
                       open(os.path.join(datapath,
-                                        '.mlaunch_startup'), 'w'), -1)
-        except Exception:
-            pass
+                                        '.mlaunch_startup'), 'w'), indent=-1)
+        except Exception as ex:
+            print("ERROR STORING Parameters:", ex)
 
     def _create_paths(self, basedir, name=None):
         """Create datadir and subdir paths."""
@@ -1461,42 +1490,45 @@ class MLaunchTool(BaseCmdLineTool):
         # get the help list of the binary
         if self.args and self.args['binarypath']:
             binary = os.path.join(self.args['binarypath'], binary)
-        ret = (subprocess.Popen([binary, '--help'],
+        ret = (subprocess.Popen(['%s' % binary, '--help'],
                stderr=subprocess.STDOUT, stdout=subprocess.PIPE, shell=False))
 
         out, err = ret.communicate()
-
         accepted_arguments = []
         # extract all arguments starting with a '-'
-        for line in [option for option in out.split('\n')]:
+        for line in [option for option in out.decode('utf-8').split('\n')]:
             line = line.lstrip()
             if line.startswith('-'):
                 argument = line.split()[0]
-                # exception: don't allow unsupported config server arguments
-                if config and argument in ['--oplogSize', '--storageEngine',
-                                           '--smallfiles', '--nojournal']:
-                    continue
                 accepted_arguments.append(argument)
 
         # add undocumented options
         accepted_arguments.append('--setParameter')
-        if binary == "mongod":
+        if binary.endswith('mongod'):
             accepted_arguments.append('--wiredTigerEngineConfigString')
 
         # filter valid arguments
         result = []
         for i, arg in enumerate(arguments):
             if arg.startswith('-'):
-                # check if the binary accepts this argument or special
-                # case -vvv for any number of v
-                if arg in accepted_arguments or re.match(r'-v+', arg):
+                # check if the binary accepts this argument
+                # or special case -vvv for any number of v
+                argname = arg.split('=', 1)[0]
+                if (binary.endswith('mongod') and config and
+                      argname in self.UNSUPPORTED_CONFIG_ARGS):
+                    continue
+                elif argname in accepted_arguments or re.match(r'-v+', arg):
                     result.append(arg)
-                else:
+                elif (binary.endswith('mongod') and
+                      argname in self.UNDOCUMENTED_MONGOD_ARGS):
+                    result.append(arg)
+                elif self.ignored_arguments.get(binary + argname) is None:
                     # warn once for each combination of binary and unknown arg
-                    if self.ignored_arguments.get(binary + arg) is None:
-                        self.ignored_arguments[binary + arg] = True
-                        print("warning: ignoring unknown argument %s for %s"
-                              % (arg, binary))
+                    self.ignored_arguments[binary + argname] = True
+                    if not (binary.endswith("mongos") and
+                        arg in self.UNSUPPORTED_MONGOS_ARGS):
+                        print("warning: ignoring unknown argument %s for %s" %
+                            (arg, binary))
             elif i > 0 and arguments[i - 1] in result:
                 # if it doesn't start with a '-', it could be the value of
                 # the last argument, e.g. `--slowms 1000`
@@ -1521,6 +1553,13 @@ class MLaunchTool(BaseCmdLineTool):
 
     def _get_ssl_pymongo_options(self, args):
         opts = {}
+        for parser in [self.ssl_server_args]:
+            for action in parser._group_actions:
+                name = action.dest
+                value = args.get(name)
+                if value:
+                    opts['ssl'] = True
+                    opts['ssl_cert_reqs'] = ssl.CERT_NONE
         for parser in self.ssl_args, self.ssl_client_args:
             for action in parser._group_actions:
                 name = action.dest
@@ -1573,7 +1612,7 @@ class MLaunchTool(BaseCmdLineTool):
         logpath = re.search(r'--logpath ([^\s]+)', command_str)
         loglines = ''
         try:
-            with open(logpath.group(1), 'r') as logfile:
+            with open(logpath.group(1), 'rb') as logfile:
                 for line in logfile:
                     if not line.startswith('----- BEGIN BACKTRACE -----'):
                         loglines += line
@@ -1584,8 +1623,6 @@ class MLaunchTool(BaseCmdLineTool):
         return loglines
 
     def _start_on_ports(self, ports, wait=False, override_auth=False):
-        threads = []
-
         if override_auth and self.args['verbose']:
             print("creating cluster without auth for setup, "
                   "will enable auth at the end...")
@@ -1600,16 +1637,13 @@ class MLaunchTool(BaseCmdLineTool):
 
             try:
                 if os.name == 'nt':
-                    ret = subprocess.check_call(filter(None,
-                                                       command_str.split(' ')),
-                                                shell=True)
+                    subprocess.check_call(command_str, shell=True)
                     # create sub process on windows doesn't wait for output,
                     # wait a few seconds for mongod instance up
                     time.sleep(5)
                 else:
-                    ret = subprocess.check_output([command_str],
-                                                  stderr=subprocess.STDOUT,
-                                                  shell=True)
+                    subprocess.check_output([command_str], shell=True,
+                                            stderr=subprocess.STDOUT)
 
                 binary = command_str.split()[0]
                 if '--configsvr' in command_str:
@@ -1640,6 +1674,7 @@ class MLaunchTool(BaseCmdLineTool):
         con = self.client('localhost:%i' % port)
         try:
             rs_status = con['admin'].command({'replSetGetStatus': 1})
+            return rs_status
         except OperationFailure as e:
             # not initiated yet
             for i in range(maxwait):
@@ -1658,13 +1693,24 @@ class MLaunchTool(BaseCmdLineTool):
 
     def _add_user(self, port, name, password, database, roles):
         con = self.client('localhost:%i' % port)
+        v = con['admin'].command('isMaster').get('maxWireVersion', 0)
+        if v >= 7:
+            # Until drivers have implemented SCRAM-SHA-256, use old mechanism.
+            opts = {'mechanisms': ['SCRAM-SHA-1']}
+        else:
+            opts = {}
+
+        if database == "$external":
+            password = None
+
         try:
-            con[database].add_user(name, password=password, roles=roles)
+            con[database].add_user(name, password=password, roles=roles,
+                                   **opts)
         except OperationFailure as e:
-            pass
+            raise e
         except TypeError as e:
             if pymongo_version < (2, 5, 0):
-                con[database].add_user(name, password=password)
+                con[database].add_user(name, password=password, **opts)
                 warnings.warn("Your pymongo version is too old to support "
                               "auth roles. Added a legacy user with root "
                               "access. To support roles, you need to upgrade "
@@ -1673,7 +1719,7 @@ class MLaunchTool(BaseCmdLineTool):
                 raise e
 
     def _get_processes(self):
-        all_ports = self.get_tagged('running')
+        all_ports = self.get_tagged(['running'])
 
         process_dict = {}
 
@@ -1723,10 +1769,10 @@ class MLaunchTool(BaseCmdLineTool):
         if mrsc.is_primary:
             # update cluster tags now that we have a primary
             self.cluster_tags['primary'].append(mrsc.primary[1])
-            self.cluster_tags['secondary'].extend(map(itemgetter(1),
-                                                      mrsc.secondaries))
-            self.cluster_tags['arbiter'].extend(map(itemgetter(1),
-                                                    mrsc.arbiters))
+            self.cluster_tags['secondary'].extend(list(map(itemgetter(1),
+                                                       mrsc.secondaries)))
+            self.cluster_tags['arbiter'].extend(list(map(itemgetter(1),
+                                                     mrsc.arbiters)))
 
             # secondaries in cluster_tree (order is now important)
             self.cluster_tree.setdefault('secondary', [])
@@ -1765,7 +1811,7 @@ class MLaunchTool(BaseCmdLineTool):
             # construct startup strings for a non-sharded replica set
             self._construct_replset(self.dir, self.args['port'],
                                     self.args['name'],
-                                    range(self.args['nodes']),
+                                    list(range(self.args['nodes'])),
                                     self.args['arbiter'])
 
         # discover current setup
@@ -1782,20 +1828,25 @@ class MLaunchTool(BaseCmdLineTool):
         # create shards as stand-alones or replica sets
         nextport = self.args['port'] + num_mongos
         for shard in shard_names:
-            if (self.args['single']
-                and LooseVersion(current_version) >= LooseVersion("3.6.0")):
-                errmsg = " \n * In MongoDB 3.6 and above a Shard must be made up of a replica set. Please use --replicaset option when starting a sharded cluster.*"
+            if (self.args['single'] and
+                    LooseVersion(current_version) >= LooseVersion("3.6.0")):
+                errmsg = " \n * In MongoDB 3.6 and above a Shard must be " \
+                         "made up of a replica set. Please use --replicaset " \
+                         "option when starting a sharded cluster.*"
                 raise SystemExit(errmsg)
 
-            elif (self.args['single']
-                  and LooseVersion(current_version) < LooseVersion("3.6.0")):
+            elif (self.args['single'] and
+                    LooseVersion(current_version) < LooseVersion("3.6.0")):
                 self.shard_connection_str.append(
-                    self._construct_single(self.dir, nextport, name=shard, extra='--shardsvr'))
+                    self._construct_single(
+                        self.dir, nextport, name=shard, extra='--shardsvr'))
                 nextport += 1
             elif self.args['replicaset']:
                 self.shard_connection_str.append(
-                    self._construct_replset(self.dir, nextport, shard, num_nodes=range(self.args['nodes']),
-                                            arbiter=self.args['arbiter'], extra='--shardsvr'))
+                    self._construct_replset(
+                        self.dir, nextport, shard,
+                        num_nodes=list(range(self.args['nodes'])),
+                        arbiter=self.args['arbiter'], extra='--shardsvr'))
                 nextport += self.args['nodes']
                 if self.args['arbiter']:
                     nextport += 1
@@ -1896,8 +1947,8 @@ class MLaunchTool(BaseCmdLineTool):
         if isreplset:
             return self._construct_replset(basedir=basedir, portstart=port,
                                            name=name,
-                                           num_nodes=range(self
-                                                           .args['config']),
+                                           num_nodes=list(range(
+                                               self.args['config'])),
                                            arbiter=False, extra='--configsvr')
         else:
             datapath = self._create_paths(basedir, name)
@@ -1950,7 +2001,10 @@ class MLaunchTool(BaseCmdLineTool):
                 and (self.args['sharded'] or self.args['replicaset'])
                 and '--bind_ip' not in extra):
             os.removedirs(dbpath)
-            errmsg = " \n * If hostname is specified, please include '--bind_ip_all' or '--bind_ip' options when deploying replica sets or sharded cluster with MongoDB version 3.6.0 or greater"
+            errmsg = " \n * If hostname is specified, please include "\
+                "'--bind_ip_all' or '--bind_ip' options when deploying "\
+                "replica sets or sharded cluster with MongoDB version 3.6.0 "\
+                "or greater"
             raise SystemExit(errmsg)
 
         extra += self._get_ssl_server_args()
@@ -1959,12 +2013,14 @@ class MLaunchTool(BaseCmdLineTool):
         if os.name == 'nt':
             newdbpath = dbpath.replace('\\', '\\\\')
             newlogpath = logpath.replace('\\', '\\\\')
-            command_str = ("start /b %s %s --dbpath %s --logpath %s --port %i "
-                           "%s %s" % (os.path.join(path, 'mongod'),
+            command_str = ("start /b \"\" \"%s\" %s --dbpath \"%s\" "
+                           " --logpath \"%s\" --port %i "
+                           "%s %s" % (os.path.join(path, 'mongod.exe'),
                                       rs_param, newdbpath, newlogpath, port,
                                       auth_param, extra))
         else:
-            command_str = ("%s %s --dbpath %s --logpath %s --port %i --fork "
+            command_str = ("\"%s\" %s --dbpath \"%s\" --logpath \"%s\" "
+                           "--port %i --fork "
                            "%s %s" % (os.path.join(path, 'mongod'), rs_param,
                                       dbpath, logpath, port, auth_param,
                                       extra))
@@ -1975,9 +2031,6 @@ class MLaunchTool(BaseCmdLineTool):
     def _construct_mongos(self, logpath, port, configdb):
         """Construct command line strings for a mongos process."""
         extra = ''
-        out = subprocess.PIPE
-        if self.args['verbose']:
-            out = None
 
         auth_param = ''
         if self.args['auth']:
@@ -1993,12 +2046,12 @@ class MLaunchTool(BaseCmdLineTool):
         path = self.args['binarypath'] or ''
         if os.name == 'nt':
             newlogpath = logpath.replace('\\', '\\\\')
-            command_str = ("start /b %s --logpath %s --port %i --configdb %s "
+            command_str = ("start /b %s --logpath \"%s\" --port %i --configdb %s "
                            "%s %s " % (os.path.join(path, 'mongos'),
                                        newlogpath, port, configdb,
                                        auth_param, extra))
         else:
-            command_str = ("%s --logpath %s --port %i --configdb %s %s %s "
+            command_str = ("%s --logpath \"%s\" --port %i --configdb %s %s %s "
                            "--fork" % (os.path.join(path, 'mongos'), logpath,
                                        port, configdb, auth_param, extra))
 
@@ -2006,7 +2059,7 @@ class MLaunchTool(BaseCmdLineTool):
         self.startup_info[str(port)] = command_str
 
     def _read_key_file(self):
-        with open(os.path.join(self.dir, 'keyfile'), 'r') as f:
+        with open(os.path.join(self.dir, 'keyfile'), 'rb') as f:
             return ''.join(f.readlines())
 
 

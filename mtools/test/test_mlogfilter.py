@@ -36,7 +36,7 @@ class TestMLogFilter(object):
         # load logfile(s)
         self.logfile_path = os.path.join(os.path.dirname(mtools.__file__),
                                          'test/logfiles/', filename)
-        self.logfile = LogFile(open(self.logfile_path, 'r'))
+        self.logfile = LogFile(open(self.logfile_path, 'rb'))
         self.current_year = datetime.now().year
 
     def test_msToString(self):
@@ -49,7 +49,7 @@ class TestMLogFilter(object):
         random_start = random_date(self.logfile.start, self.logfile.end)
         self.tool.run('%s --from '
                       '%s' % (self.logfile_path,
-                              random_start.strftime("%b %d %H:%M:%S")))
+                              random_start.strftime("%b %d %H:%M:%S.%f")))
         output = sys.stdout.getvalue()
         for line in output.splitlines():
             le = LogEvent(line)
@@ -74,8 +74,8 @@ class TestMLogFilter(object):
 
         self.tool.run('%s --from %s --to '
                       '%s' % (self.logfile_path,
-                              random_start.strftime("%b %d %H:%M:%S"),
-                              random_end.strftime("%b %d %H:%M:%S")))
+                              random_start.strftime("%b %d %H:%M:%S.%f"),
+                              random_end.strftime("%b %d %H:%M:%S.%f")))
         output = sys.stdout.getvalue()
         for line in output.splitlines():
             le = LogEvent(line)
@@ -86,7 +86,7 @@ class TestMLogFilter(object):
     def test_from_to_26_log(self):
         logfile_26_path = os.path.join(os.path.dirname(mtools.__file__),
                                        'test/logfiles/', 'mongod_26.log')
-        logfile_26 = LogFile(open(logfile_26_path, 'r'))
+        logfile_26 = LogFile(open(logfile_26_path, 'rb'))
 
         random_start = random_date(logfile_26.start, logfile_26.end)
         random_end = random_date(random_start + timedelta(minutes=1),
@@ -97,8 +97,8 @@ class TestMLogFilter(object):
 
         self.tool.run('%s --from %s --to '
                       '%s' % (logfile_26_path,
-                              random_start.strftime("%b %d %H:%M:%S"),
-                              random_end.strftime("%b %d %H:%M:%S")))
+                              random_start.strftime("%b %d %H:%M:%S.%f"),
+                              random_end.strftime("%b %d %H:%M:%S.%f")))
         output = sys.stdout.getvalue()
         assert len(output.splitlines()) > 0
 
@@ -119,8 +119,8 @@ class TestMLogFilter(object):
         self.tool.is_stdin = True
         self.tool.run('%s --from %s --to '
                       '%s' % (self.logfile_path,
-                              start.strftime("%b %d %H:%M:%S"),
-                              end.strftime("%b %d %H:%M:%S")))
+                              start.strftime("%b %d %H:%M:%S.%f"),
+                              end.strftime("%b %d %H:%M:%S.%f")))
         self.tool.is_stdin = False
 
         output = sys.stdout.getvalue()
@@ -176,7 +176,7 @@ class TestMLogFilter(object):
             self.tool.run('%s %s --markers foo bar baz' % (self.logfile_path,
                                                            self.logfile_path))
         except SystemExit as e:
-            assert 'Number of markers not the same' in e.message
+            assert 'Number of markers not the same' in str(e)
 
     def test_exclude(self):
         file_length = len(self.logfile)
@@ -310,7 +310,7 @@ class TestMLogFilter(object):
         try:
             self.tool.run('%s --timezone 1 2 3' % self.logfile_path)
         except SystemExit as e:
-            assert "Invalid number of timezone parameters" in e.message
+            assert "Invalid number of timezone parameters" in str(e)
 
     def test_verbose(self):
         self.tool.run('%s --slow --verbose' % self.logfile_path)

@@ -6,9 +6,8 @@ from operator import itemgetter
 from mtools.mplotqueries.plottypes.base_type import BasePlotType
 
 try:
-    import matplotlib.pyplot as plt
-
     from matplotlib import __version__ as mpl_version
+    import matplotlib.pyplot as plt
     from matplotlib.dates import date2num
     from matplotlib.patches import Polygon
 
@@ -76,9 +75,10 @@ class ScatterPlotType(BasePlotType):
         if self.logscale:
             axis.semilogy()
 
+        group_label = group.replace('$', '\$')
         artist = axis.plot_date(x, y, color=color, markeredgecolor='k',
                                 marker=marker, alpha=0.8,
-                                markersize=7, picker=5, label=group)[0]
+                                markersize=7, picker=5, label=group_label)[0]
         # add meta-data for picking
         artist._mt_plot_type = self
         artist._mt_group = group

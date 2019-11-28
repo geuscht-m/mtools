@@ -8,6 +8,7 @@ import six
 
 def _decode_pattern_list(data):
     rv = []
+    contains_dict = False
     for item in data:
         if isinstance(item, six.text_type):
             item = item.encode('utf-8')
@@ -15,17 +16,22 @@ def _decode_pattern_list(data):
             item = _decode_pattern_list(item)
         elif isinstance(item, dict):
             item = _decode_pattern_dict(item)
+            contains_dict = True
         rv.append(item)
 
-    rv = sorted(rv)
+    # avoid sorting if any element in the list is a dict
+    if not contains_dict:
+        rv = sorted(rv)
+
     return rv
 
 
 def _decode_pattern_dict(data):
     rv = {}
     for key, value in six.iteritems(data):
-        if isinstance(key, six.text_type):
+        if isinstance(key, bytes):
             key = key.encode('utf-8')
+        if isinstance(key, six.text_type):
             if key in ['$in', '$gt', '$gte', '$lt', '$lte', '$exists']:
                 return 1
             if key == '$nin':
@@ -39,7 +45,6 @@ def _decode_pattern_dict(data):
             value = _decode_pattern_dict(value)
         else:
             value = 1
-
         rv[key] = value
     return rv
 
@@ -81,7 +86,7 @@ def json2pattern(s):
     try:
         doc = json.loads(s, object_hook=_decode_pattern_dict)
         return json.dumps(doc, sort_keys=True, separators=(', ', ': '))
-    except ValueError:
+    except ValueError as ex:
         return None
 
 
